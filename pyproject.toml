@@ -1,0 +1,94 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dahua-mcp"
+version = "0.1.0"
+description = "MCP server for Dahua/Amcrest IP camera management"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = {file = "LICENSE"}
+keywords = ["dahua", "amcrest", "mcp", "camera", "ip-camera", "surveillance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Networking",
+    "Topic :: Utilities",
+]
+
+dependencies = [
+    "fastmcp>=2.14.0,<3",
+    "httpx>=0.28.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pre-commit",
+]
+
+[project.scripts]
+dahua-mcp = "dahua_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dahua_mcp"]
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+    "N",  # pep8-naming
+    "S",  # flake8-bandit
+    "T20", # flake8-print
+    "SIM", # flake8-simplify
+    "LOG", # flake8-logging
+    "RUF", # Ruff-specific rules
+]
+
+ignore = [
+    "E501",  # Line too long, handled by formatter
+    "S104",  # Possible binding to all interface
+]
+
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S106", "S107"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dahua_mcp"]
+force-single-line = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
