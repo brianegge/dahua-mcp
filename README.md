@@ -60,7 +60,19 @@ Each camera entry supports:
 
 #### Option A: stdio (Claude Code / Claude Desktop)
 
-Add to your Claude Code settings (`~/.claude.json`) or Claude Desktop config:
+Using the Claude Code CLI:
+
+```sh
+# From PyPI
+claude mcp add dahua-mcp -- uvx dahua-mcp \
+  -e DAHUA_CAMERAS_CONFIG=/path/to/cameras.json
+
+# From a local clone
+claude mcp add dahua-mcp -- uv run --directory /path/to/dahua-mcp dahua-mcp \
+  -e DAHUA_CAMERAS_CONFIG=/path/to/cameras.json
+```
+
+Or manually add to your Claude Code settings (`~/.claude.json`) or Claude Desktop config:
 
 ```json
 {
