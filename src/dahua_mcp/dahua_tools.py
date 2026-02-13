@@ -12,6 +12,14 @@ from pydantic import Field
 from dahua_mcp.dahua_client import DahuaCameraManager
 
 
+def _error_str(e: Exception) -> str:
+    """Format an exception into a useful error string, even if str(e) is empty."""
+    msg = str(e)
+    if msg:
+        return f"{type(e).__name__}: {msg}"
+    return f"{type(e).__name__} (no details)"
+
+
 def register_tools(mcp, config):
     """Register Dahua camera tools with the MCP server"""
 
@@ -42,8 +50,8 @@ def register_tools(mcp, config):
             await ctx.info("Listing configured cameras...")
             return manager.list_cameras()
         except Exception as e:
-            await ctx.error(f"Error listing cameras: {e!s}")
-            return [{"error": str(e)}]
+            await ctx.error(f"Error listing cameras: {_error_str(e)}")
+            return [{"error": _error_str(e)}]
 
     ##########################
     # System Info
@@ -78,8 +86,8 @@ def register_tools(mcp, config):
             cam = manager.get_camera(camera)
             return await cam.get_parsed("magicBox.cgi?action=getSystemInfo")
         except Exception as e:
-            await ctx.error(f"Error getting system info: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting system info: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "system", "read-only"},
@@ -110,8 +118,8 @@ def register_tools(mcp, config):
             cam = manager.get_camera(camera)
             return await cam.get_parsed("magicBox.cgi?action=getDeviceType")
         except Exception as e:
-            await ctx.error(f"Error getting device type: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting device type: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "system", "read-only"},
@@ -142,8 +150,8 @@ def register_tools(mcp, config):
             cam = manager.get_camera(camera)
             return await cam.get_parsed("magicBox.cgi?action=getSoftwareVersion")
         except Exception as e:
-            await ctx.error(f"Error getting software version: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting software version: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "system", "read-only"},
@@ -174,8 +182,8 @@ def register_tools(mcp, config):
             cam = manager.get_camera(camera)
             return await cam.get_parsed("magicBox.cgi?action=getMachineName")
         except Exception as e:
-            await ctx.error(f"Error getting machine name: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting machine name: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "system", "read-only"},
@@ -206,8 +214,8 @@ def register_tools(mcp, config):
             cam = manager.get_camera(camera)
             return await cam.get_parsed("magicBox.cgi?action=getSerialNo")
         except Exception as e:
-            await ctx.error(f"Error getting serial number: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting serial number: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "system", "read-only"},
@@ -238,8 +246,8 @@ def register_tools(mcp, config):
             cam = manager.get_camera(camera)
             return await cam.get_parsed("magicBox.cgi?action=getHardwareVersion")
         except Exception as e:
-            await ctx.error(f"Error getting hardware version: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting hardware version: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "system", "read-only"},
@@ -270,8 +278,8 @@ def register_tools(mcp, config):
             cam = manager.get_camera(camera)
             return await cam.get_parsed("magicBox.cgi?action=getVendor")
         except Exception as e:
-            await ctx.error(f"Error getting vendor: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting vendor: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     ##########################
     # Config Read
@@ -317,8 +325,8 @@ def register_tools(mcp, config):
                 f"configManager.cgi?action=getConfig&name={name}"
             )
         except Exception as e:
-            await ctx.error(f"Error getting config: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting config: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "config", "read-only"},
@@ -351,8 +359,8 @@ def register_tools(mcp, config):
                 "configManager.cgi?action=getConfig&name=MotionDetect"
             )
         except Exception as e:
-            await ctx.error(f"Error getting motion detection config: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting motion detection config: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "config", "read-only"},
@@ -387,8 +395,8 @@ def register_tools(mcp, config):
                 "configManager.cgi?action=getConfig&name=VideoInMode"
             )
         except Exception as e:
-            await ctx.error(f"Error getting video input mode: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting video input mode: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "config", "read-only"},
@@ -421,8 +429,8 @@ def register_tools(mcp, config):
                 "configManager.cgi?action=getConfig&name=Encode"
             )
         except Exception as e:
-            await ctx.error(f"Error getting encoding config: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting encoding config: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "config", "read-only"},
@@ -455,8 +463,8 @@ def register_tools(mcp, config):
                 "configManager.cgi?action=getConfig&name=Network"
             )
         except Exception as e:
-            await ctx.error(f"Error getting network config: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting network config: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "config", "read-only"},
@@ -487,8 +495,8 @@ def register_tools(mcp, config):
             cam = manager.get_camera(camera)
             return await cam.get_parsed("configManager.cgi?action=getConfig&name=NTP")
         except Exception as e:
-            await ctx.error(f"Error getting NTP config: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error getting NTP config: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     ##########################
     # Config Write
@@ -536,8 +544,8 @@ def register_tools(mcp, config):
                 f"configManager.cgi?action=setConfig&{param_str}"
             )
         except Exception as e:
-            await ctx.error(f"Error setting config: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error setting config: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "config", "write"},
@@ -584,8 +592,8 @@ def register_tools(mcp, config):
                 f"configManager.cgi?action=setConfig&MotionDetect[{channel}].Enable={val}&MotionDetect[{channel}].DetectVersion=V3.0"
             )
         except Exception as e:
-            await ctx.error(f"Error toggling motion detection: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error toggling motion detection: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "config", "write"},
@@ -630,8 +638,8 @@ def register_tools(mcp, config):
                 f"configManager.cgi?action=setConfig&RecordMode[{channel}].Mode={mode_val}"
             )
         except Exception as e:
-            await ctx.error(f"Error setting record mode: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error setting record mode: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     ##########################
     # System Control
@@ -666,8 +674,8 @@ def register_tools(mcp, config):
             cam = manager.get_camera(camera)
             return await cam.get_parsed("magicBox.cgi?action=reboot")
         except Exception as e:
-            await ctx.error(f"Error rebooting: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error rebooting: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     @mcp.tool(
         tags={"dahua", "snapshot", "read-only"},
@@ -712,8 +720,8 @@ def register_tools(mcp, config):
                 "size_bytes": len(data),
             }
         except Exception as e:
-            await ctx.error(f"Error taking snapshot: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error taking snapshot: {_error_str(e)}")
+            return {"error": _error_str(e)}
 
     ##########################
     # Logs
@@ -809,5 +817,5 @@ def register_tools(mcp, config):
 
             return find_resp
         except Exception as e:
-            await ctx.error(f"Error searching logs: {e!s}")
-            return {"error": str(e)}
+            await ctx.error(f"Error searching logs: {_error_str(e)}")
+            return {"error": _error_str(e)}

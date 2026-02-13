@@ -46,16 +46,22 @@ class DahuaCamera:
         """GET a CGI endpoint and parse key=value response into a dict."""
         await self._ensure_client()
         url = f"/cgi-bin/{endpoint}"
-        resp = await self.client.get(url, params=params)
-        resp.raise_for_status()
+        try:
+            resp = await self.client.get(url, params=params)
+            resp.raise_for_status()
+        except Exception as e:
+            raise type(e)(f"{self.config.name} ({self.config.host}): {e}") from e
         return parse_dahua_response(resp.text)
 
     async def get_raw(self, endpoint: str, params: dict[str, Any] | None = None) -> str:
         """GET a CGI endpoint and return raw text."""
         await self._ensure_client()
         url = f"/cgi-bin/{endpoint}"
-        resp = await self.client.get(url, params=params)
-        resp.raise_for_status()
+        try:
+            resp = await self.client.get(url, params=params)
+            resp.raise_for_status()
+        except Exception as e:
+            raise type(e)(f"{self.config.name} ({self.config.host}): {e}") from e
         return resp.text
 
     async def get_bytes(
@@ -64,8 +70,11 @@ class DahuaCamera:
         """GET a CGI endpoint and return raw bytes (e.g. snapshot JPEG)."""
         await self._ensure_client()
         url = f"/cgi-bin/{endpoint}"
-        resp = await self.client.get(url, params=params)
-        resp.raise_for_status()
+        try:
+            resp = await self.client.get(url, params=params)
+            resp.raise_for_status()
+        except Exception as e:
+            raise type(e)(f"{self.config.name} ({self.config.host}): {e}") from e
         return resp.content
 
 
