@@ -122,9 +122,31 @@ def _load_cameras_file(path: str) -> dict:
             return yaml.safe_load(text)
 
 
+def _find_cameras_config() -> str:
+    """Find cameras config file, checking default locations.
+
+    Search order:
+    1. DAHUA_CAMERAS_CONFIG env var (if set)
+    2. ~/.config/dahua-mcp/cameras.yaml
+    3. ~/.config/dahua-mcp/cameras.json
+    4. cameras.json in current directory (fallback)
+    """
+    env_path = os.getenv("DAHUA_CAMERAS_CONFIG")
+    if env_path:
+        return env_path
+
+    config_dir = Path.home() / ".config" / "dahua-mcp"
+    for name in ("cameras.yaml", "cameras.yml", "cameras.json"):
+        candidate = config_dir / name
+        if candidate.exists():
+            return str(candidate)
+
+    return "cameras.json"
+
+
 def get_dahua_config_from_env() -> DahuaConfig:
     """Load Dahua configuration from environment variables + cameras config file."""
-    config_path = os.getenv("DAHUA_CAMERAS_CONFIG", "cameras.json")
+    config_path = _find_cameras_config()
     raw = _load_cameras_file(config_path)
 
     cameras = [CameraConfig(**cam) for cam in raw.get("cameras", [])]

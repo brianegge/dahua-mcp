@@ -6,7 +6,7 @@ MCP server for managing Dahua/Amcrest IP cameras via their CGI HTTP API. Support
 
 ### 1. Create a cameras config file
 
-Create `cameras.json` or `cameras.yaml` with your camera credentials.
+Create `~/.config/dahua-mcp/cameras.yaml` (or `cameras.json`) with your camera credentials. This is the default config location — no env var needed.
 
 **JSON** (`cameras.json`):
 ```json
@@ -60,16 +60,17 @@ Each camera entry supports:
 
 #### Option A: stdio (Claude Code / Claude Desktop)
 
-Using the Claude Code CLI:
+Using the Claude Code CLI (cameras config auto-discovered from `~/.config/dahua-mcp/`):
 
 ```sh
 # From PyPI
-claude mcp add dahua-mcp -- uvx dahua-mcp \
-  -e DAHUA_CAMERAS_CONFIG=/path/to/cameras.json
+claude mcp add dahua-mcp -- uvx dahua-mcp
 
 # From a local clone
-claude mcp add dahua-mcp -- uv run --directory /path/to/dahua-mcp dahua-mcp \
-  -e DAHUA_CAMERAS_CONFIG=/path/to/cameras.json
+claude mcp add dahua-mcp -- uv run --directory /path/to/dahua-mcp dahua-mcp
+
+# With a custom config path
+claude mcp add dahua-mcp -e DAHUA_CAMERAS_CONFIG=/path/to/cameras.json -- uvx dahua-mcp
 ```
 
 Or manually add to your Claude Code settings (`~/.claude.json`) or Claude Desktop config:
@@ -80,10 +81,7 @@ Or manually add to your Claude Code settings (`~/.claude.json`) or Claude Deskto
     "dahua-mcp": {
       "type": "stdio",
       "command": "uvx",
-      "args": ["dahua-mcp"],
-      "env": {
-        "DAHUA_CAMERAS_CONFIG": "/path/to/cameras.json"
-      }
+      "args": ["dahua-mcp"]
     }
   }
 }
@@ -97,11 +95,18 @@ Or run from a local clone:
     "dahua-mcp": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/dahua-mcp", "dahua-mcp"],
-      "env": {
-        "DAHUA_CAMERAS_CONFIG": "/path/to/cameras.json"
-      }
+      "args": ["run", "--directory", "/path/to/dahua-mcp", "dahua-mcp"]
     }
+  }
+}
+```
+
+To override the config location, add an `env` block:
+
+```json
+{
+  "env": {
+    "DAHUA_CAMERAS_CONFIG": "/custom/path/cameras.yaml"
   }
 }
 ```
@@ -170,7 +175,7 @@ All settings beyond camera credentials are configured via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DAHUA_CAMERAS_CONFIG` | `cameras.json` | Path to cameras config file (JSON or YAML) |
+| `DAHUA_CAMERAS_CONFIG` | `~/.config/dahua-mcp/cameras.yaml` | Path to cameras config file (JSON or YAML). Auto-discovers from `~/.config/dahua-mcp/` if not set. |
 | `DAHUA_TIMEOUT` | `20` | HTTP request timeout in seconds |
 | `READ_ONLY_MODE` | `false` | Disable all write tools (reboot, set_config, etc.) |
 | `DISABLED_TAGS` | — | Comma-separated tags to disable (e.g. `destructive,write`) |

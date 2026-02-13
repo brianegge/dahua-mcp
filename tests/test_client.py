@@ -3,6 +3,7 @@ import json
 import yaml
 
 from dahua_mcp.dahua_client import DahuaCameraManager
+from dahua_mcp.dahua_client import _find_cameras_config
 from dahua_mcp.dahua_client import _load_cameras_file
 from dahua_mcp.models import CameraConfig
 from dahua_mcp.models import DahuaConfig
@@ -80,6 +81,44 @@ class TestLoadCamerasFile:
 
         with pytest.raises(FileNotFoundError):
             _load_cameras_file("/nonexistent/path/cameras.json")
+
+
+class TestFindCamerasConfig:
+    def test_env_var_takes_priority(self, monkeypatch, tmp_path):
+        custom = tmp_path / "custom.json"
+        custom.write_text("{}")
+        monkeypatch.setenv("DAHUA_CAMERAS_CONFIG", str(custom))
+        assert _find_cameras_config() == str(custom)
+
+    def test_finds_yaml_in_config_dir(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DAHUA_CAMERAS_CONFIG", raising=False)
+        config_dir = tmp_path / ".config" / "dahua-mcp"
+        config_dir.mkdir(parents=True)
+        (config_dir / "cameras.yaml").write_text("cameras: []")
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        assert _find_cameras_config() == str(config_dir / "cameras.yaml")
+
+    def test_finds_json_in_config_dir(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DAHUA_CAMERAS_CONFIG", raising=False)
+        config_dir = tmp_path / ".config" / "dahua-mcp"
+        config_dir.mkdir(parents=True)
+        (config_dir / "cameras.json").write_text('{"cameras": []}')
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        assert _find_cameras_config() == str(config_dir / "cameras.json")
+
+    def test_yaml_preferred_over_json(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DAHUA_CAMERAS_CONFIG", raising=False)
+        config_dir = tmp_path / ".config" / "dahua-mcp"
+        config_dir.mkdir(parents=True)
+        (config_dir / "cameras.yaml").write_text("cameras: []")
+        (config_dir / "cameras.json").write_text('{"cameras": []}')
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        assert _find_cameras_config() == str(config_dir / "cameras.yaml")
+
+    def test_falls_back_to_cwd(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DAHUA_CAMERAS_CONFIG", raising=False)
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        assert _find_cameras_config() == "cameras.json"
 
 
 class TestDahuaCameraManager:
