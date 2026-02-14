@@ -8,7 +8,6 @@ import json
 from typing import Annotated
 
 from fastmcp import Context
-from pydantic import BeforeValidator
 from pydantic import Field
 
 from dahua_mcp.dahua_client import DahuaCameraManager
@@ -518,10 +517,9 @@ def register_tools(mcp, config):
             Field(description="Camera name from list_cameras"),
         ],
         params: Annotated[
-            dict[str, str],
-            BeforeValidator(lambda v: json.loads(v) if isinstance(v, str) else v),
+            str,
             Field(
-                description="Key-value pairs to set (e.g. {'MotionDetect[0].Enable': 'true', 'MotionDetect[0].DetectVersion': 'V3.0'})"
+                description='JSON object of key-value pairs to set (e.g. \'{"MotionDetect[0].Enable": "true"}\')'
             ),
         ],
         ctx: Context = None,
@@ -540,9 +538,10 @@ def register_tools(mcp, config):
             dict: Response from the camera (typically contains "OK" on success).
         """
         try:
-            await ctx.info(f"Setting config on {camera}: {params}...")
+            parsed = json.loads(params) if isinstance(params, str) else params
+            await ctx.info(f"Setting config on {camera}: {parsed}...")
             cam = manager.get_camera(camera)
-            param_str = "&".join(f"{k}={v}" for k, v in params.items())
+            param_str = "&".join(f"{k}={v}" for k, v in parsed.items())
             return await cam.get_parsed(
                 f"configManager.cgi?action=setConfig&{param_str}"
             )
