@@ -40,41 +40,37 @@ class DahuaCamera:
             await self.client.aclose()
             self.client = None
 
+    async def _get(
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> httpx.Response:
+        """GET a CGI endpoint. Raises on HTTP errors with camera context."""
+        await self._ensure_client()
+        url = f"/cgi-bin/{endpoint}"
+        resp = await self.client.get(url, params=params)
+        if resp.is_error:
+            raise RuntimeError(
+                f"{self.config.name} ({self.config.host}): "
+                f"HTTP {resp.status_code} on {endpoint}"
+            )
+        return resp
+
     async def get_parsed(
         self, endpoint: str, params: dict[str, Any] | None = None
     ) -> dict:
         """GET a CGI endpoint and parse key=value response into a dict."""
-        await self._ensure_client()
-        url = f"/cgi-bin/{endpoint}"
-        try:
-            resp = await self.client.get(url, params=params)
-            resp.raise_for_status()
-        except Exception as e:
-            raise type(e)(f"{self.config.name} ({self.config.host}): {e}") from e
+        resp = await self._get(endpoint, params)
         return parse_dahua_response(resp.text)
 
     async def get_raw(self, endpoint: str, params: dict[str, Any] | None = None) -> str:
         """GET a CGI endpoint and return raw text."""
-        await self._ensure_client()
-        url = f"/cgi-bin/{endpoint}"
-        try:
-            resp = await self.client.get(url, params=params)
-            resp.raise_for_status()
-        except Exception as e:
-            raise type(e)(f"{self.config.name} ({self.config.host}): {e}") from e
+        resp = await self._get(endpoint, params)
         return resp.text
 
     async def get_bytes(
         self, endpoint: str, params: dict[str, Any] | None = None
     ) -> bytes:
         """GET a CGI endpoint and return raw bytes (e.g. snapshot JPEG)."""
-        await self._ensure_client()
-        url = f"/cgi-bin/{endpoint}"
-        try:
-            resp = await self.client.get(url, params=params)
-            resp.raise_for_status()
-        except Exception as e:
-            raise type(e)(f"{self.config.name} ({self.config.host}): {e}") from e
+        resp = await self._get(endpoint, params)
         return resp.content
 
 
