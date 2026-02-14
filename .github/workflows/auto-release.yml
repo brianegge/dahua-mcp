@@ -137,3 +137,22 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      - name: Delete old releases (keep last 5)
+        if: steps.check_daily_limit.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --limit 100 --json tagName -q '.[].tagName' | tail -n +6 | while read -r tag; do
+            echo "Deleting release and tag: $tag"
+            gh release delete "$tag" --yes --cleanup-tag
+          done
+
+      - name: Delete old container images (keep last 5)
+        if: steps.check_daily_limit.outputs.skip != 'true'
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: dahua-mcp
+          package-type: container
+          min-versions-to-keep: 5
+          delete-only-untagged-versions: true
