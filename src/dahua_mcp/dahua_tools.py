@@ -4,9 +4,11 @@ Dahua MCP Server Tools
 
 import base64
 import contextlib
+import json
 from typing import Annotated
 
 from fastmcp import Context
+from pydantic import BeforeValidator
 from pydantic import Field
 
 from dahua_mcp.dahua_client import DahuaCameraManager
@@ -517,6 +519,7 @@ def register_tools(mcp, config):
         ],
         params: Annotated[
             dict[str, str],
+            BeforeValidator(lambda v: json.loads(v) if isinstance(v, str) else v),
             Field(
                 description="Key-value pairs to set (e.g. {'MotionDetect[0].Enable': 'true', 'MotionDetect[0].DetectVersion': 'V3.0'})"
             ),
