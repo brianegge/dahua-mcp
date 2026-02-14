@@ -17,23 +17,50 @@ logger = logging.getLogger(__name__)
 
 
 class DahuaCamera:
-    """Async client for a single Dahua/Amcrest camera using HTTP Digest Auth."""
+    """Async client for a single Dahua/Amcrest camera using HTTP Digest Auth.
+
+    Tries digest auth first. If the camera returns 401, falls back to basic
+    auth and remembers the preference for subsequent requests.
+    """
 
     def __init__(self, config: CameraConfig, timeout: int = 20):
         self.config = config
         self.timeout = timeout
         protocol = "https" if config.port == 443 else "http"
         self.base_url = f"{protocol}://{config.host}:{config.port}"
+        self._use_basic_auth = False
         self.client: httpx.AsyncClient | None = None
+
+    def _auth(self) -> httpx.DigestAuth | httpx.BasicAuth:
+        if self._use_basic_auth:
+            return httpx.BasicAuth(self.config.username, self.config.password)
+        return httpx.DigestAuth(self.config.username, self.config.password)
 
     async def _ensure_client(self):
         if self.client is None:
             self.client = httpx.AsyncClient(
                 base_url=self.base_url,
-                auth=httpx.DigestAuth(self.config.username, self.config.password),
+                auth=self._auth(),
                 verify=self.config.verify_ssl,
                 timeout=self.timeout,
             )
+
+    async def _recreate_client_with_basic(self):
+        """Switch to basic auth after digest auth fails."""
+        if self.client is not None:
+            await self.client.aclose()
+        self._use_basic_auth = True
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url,
+            auth=self._auth(),
+            verify=self.config.verify_ssl,
+            timeout=self.timeout,
+        )
+        logger.info(
+            "%s (%s): Switched to basic auth after digest auth 401",
+            self.config.name,
+            self.config.host,
+        )
 
     async def close(self):
         if self.client is not None:
@@ -43,10 +70,16 @@ class DahuaCamera:
     async def _get(
         self, endpoint: str, params: dict[str, Any] | None = None
     ) -> httpx.Response:
-        """GET a CGI endpoint. Raises on HTTP errors with camera context."""
+        """GET a CGI endpoint. Falls back to basic auth on 401."""
         await self._ensure_client()
         url = f"/cgi-bin/{endpoint}"
         resp = await self.client.get(url, params=params)
+
+        # If digest auth got 401 and we haven't already switched, try basic
+        if resp.status_code == 401 and not self._use_basic_auth:
+            await self._recreate_client_with_basic()
+            resp = await self.client.get(url, params=params)
+
         if resp.is_error:
             raise RuntimeError(
                 f"{self.config.name} ({self.config.host}): "

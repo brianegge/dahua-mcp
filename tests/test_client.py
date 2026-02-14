@@ -1,7 +1,11 @@
 import json
+from unittest.mock import AsyncMock
 
+import httpx
+import pytest
 import yaml
 
+from dahua_mcp.dahua_client import DahuaCamera
 from dahua_mcp.dahua_client import DahuaCameraManager
 from dahua_mcp.dahua_client import _find_cameras_config
 from dahua_mcp.dahua_client import _load_cameras_file
@@ -177,3 +181,80 @@ class TestDahuaCameraManager:
         mgr = DahuaCameraManager(config)
         cam = mgr.get_camera("secure")
         assert cam.base_url.startswith("https://")
+
+
+class TestDahuaCameraAuthFallback:
+    def _make_camera(self):
+        config = CameraConfig(
+            name="test-cam",
+            host="192.168.1.100",
+            username="admin",
+            password="pass",
+        )
+        return DahuaCamera(config)
+
+    @pytest.mark.asyncio
+    async def test_starts_with_digest_auth(self):
+        cam = self._make_camera()
+        assert cam._use_basic_auth is False
+        await cam._ensure_client()
+        assert isinstance(cam.client.auth, httpx.DigestAuth)
+        await cam.close()
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_basic_on_401(self):
+        cam = self._make_camera()
+        await cam._ensure_client()
+
+        resp_401 = httpx.Response(401, request=httpx.Request("GET", "http://test"))
+        resp_200 = httpx.Response(
+            200, request=httpx.Request("GET", "http://test"), text="OK"
+        )
+
+        # Mock the first client's get to return 401
+        cam.client.get = AsyncMock(return_value=resp_401)
+
+        # Patch _recreate_client_with_basic to swap auth but keep mock client
+        async def mock_recreate():
+            cam._use_basic_auth = True
+            cam.client.auth = httpx.BasicAuth(cam.config.username, cam.config.password)
+            # After switching, the next get should succeed
+            cam.client.get = AsyncMock(return_value=resp_200)
+
+        cam._recreate_client_with_basic = mock_recreate
+
+        resp = await cam._get("magicBox.cgi", {"action": "getDeviceType"})
+        assert resp.status_code == 200
+        assert cam._use_basic_auth is True
+        assert isinstance(cam.client.auth, httpx.BasicAuth)
+        await cam.close()
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_when_already_basic(self):
+        cam = self._make_camera()
+        cam._use_basic_auth = True
+        await cam._ensure_client()
+
+        # Basic auth also returns 401 — should raise, not retry
+        resp_401 = httpx.Response(401, request=httpx.Request("GET", "http://test"))
+        cam.client.get = AsyncMock(return_value=resp_401)
+
+        with pytest.raises(RuntimeError, match="HTTP 401"):
+            await cam._get("magicBox.cgi", {"action": "getDeviceType"})
+        await cam.close()
+
+    @pytest.mark.asyncio
+    async def test_digest_auth_succeeds_no_fallback(self):
+        cam = self._make_camera()
+        await cam._ensure_client()
+
+        resp_200 = httpx.Response(
+            200, request=httpx.Request("GET", "http://test"), text="OK"
+        )
+        cam.client.get = AsyncMock(return_value=resp_200)
+
+        resp = await cam._get("magicBox.cgi", {"action": "getDeviceType"})
+        assert resp.status_code == 200
+        assert cam._use_basic_auth is False
+        assert isinstance(cam.client.auth, httpx.DigestAuth)
+        await cam.close()
