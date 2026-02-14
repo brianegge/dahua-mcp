@@ -40,19 +40,22 @@ def register_tools(mcp, config):
     )
     async def list_cameras(
         ctx: Context = None,
-    ) -> list[dict]:
+    ) -> dict:
         """
         List all configured cameras (name, host, port). No credentials are returned.
 
         Returns:
-            list[dict]: List of camera info dicts.
+            dict: config_path and list of camera info dicts.
         """
         try:
             await ctx.info("Listing configured cameras...")
-            return manager.list_cameras()
+            return {
+                "config_path": config.config_path,
+                "cameras": manager.list_cameras(),
+            }
         except Exception as e:
             await ctx.error(f"Error listing cameras: {_error_str(e)}")
-            return [{"error": _error_str(e)}]
+            return {"error": _error_str(e)}
 
     ##########################
     # System Info

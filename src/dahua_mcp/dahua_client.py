@@ -167,6 +167,7 @@ def get_dahua_config_from_env() -> DahuaConfig:
 
     return DahuaConfig(
         cameras=cameras,
+        config_path=str(Path(config_path).resolve()),
         timeout=int(os.getenv("DAHUA_TIMEOUT", "20")),
         read_only_mode=parse_bool(os.getenv("READ_ONLY_MODE"), default=False),
         disabled_tags=disabled_tags,

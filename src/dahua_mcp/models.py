@@ -15,6 +15,7 @@ class DahuaConfig(BaseModel):
     cameras: list[CameraConfig] = Field(
         ..., description="List of camera configurations"
     )
+    config_path: str = Field("", description="Path to cameras config file")
     timeout: int = Field(20, description="HTTP request timeout in seconds")
     read_only_mode: bool = Field(False, description="Read-only mode (true/false)")
     disabled_tags: set[str] = Field(
