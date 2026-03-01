@@ -2,6 +2,7 @@
 Dahua MCP Server Tools
 """
 
+import asyncio
 import base64
 import contextlib
 import json
@@ -283,6 +284,85 @@ def register_tools(mcp, config):
             return await cam.get_parsed("magicBox.cgi?action=getVendor")
         except Exception as e:
             await ctx.error(f"Error getting vendor: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    ##########################
+    # Audio
+    ##########################
+
+    @mcp.tool(
+        tags={"dahua", "audio", "read-only"},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_audio_capabilities(
+        camera: Annotated[
+            str,
+            Field(description="Camera name from list_cameras"),
+        ],
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Get audio capabilities (microphone and speaker) from a camera.
+
+        Returns device type, microphone input source, and speaker output capability.
+
+        Args:
+            camera: Camera name from list_cameras.
+
+        Returns:
+            dict: Audio capabilities including device_type, mic, and speaker info.
+        """
+        try:
+            await ctx.info(f"Getting audio capabilities for {camera}...")
+            cam = manager.get_camera(camera)
+
+            async def _get_device_type():
+                return await cam.get_parsed("magicBox.cgi?action=getDeviceType")
+
+            async def _get_audio_input():
+                try:
+                    return await cam.get_parsed(
+                        "configManager.cgi?action=getConfig&name=AudioInput"
+                    )
+                except Exception:
+                    return None
+
+            async def _get_audio_output():
+                try:
+                    return await cam.get_parsed("devAudioOutput.cgi?action=getCaps")
+                except Exception:
+                    return None
+
+            device_type, audio_input, audio_output = await asyncio.gather(
+                _get_device_type(), _get_audio_input(), _get_audio_output()
+            )
+
+            result = {
+                "device_type": device_type.get("type", "unknown"),
+            }
+
+            # Mic capability
+            if audio_input:
+                source = audio_input.get("AudioInput[0].AudioSource", "unknown")
+                result["mic"] = True
+                result["mic_source"] = source
+            else:
+                result["mic"] = False
+
+            # Speaker capability
+            if audio_output:
+                result["speaker"] = True
+                result["audio_output"] = audio_output
+            else:
+                result["speaker"] = False
+
+            return result
+        except Exception as e:
+            await ctx.error(f"Error getting audio capabilities: {_error_str(e)}")
             return {"error": _error_str(e)}
 
     ##########################
