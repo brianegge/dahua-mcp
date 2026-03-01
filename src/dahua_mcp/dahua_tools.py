@@ -309,6 +309,8 @@ def register_tools(mcp, config):
         Get audio capabilities (microphone and speaker) from a camera.
 
         Returns device type, microphone input source, and speaker output capability.
+        Speaker detection uses devAudioOutput.cgi caps endpoint, with model number
+        suffix as fallback (AS/ASE = Audio Speaker, PV = Active Deterrence siren).
 
         Args:
             camera: Camera name from list_cameras.
@@ -320,8 +322,8 @@ def register_tools(mcp, config):
             await ctx.info(f"Getting audio capabilities for {camera}...")
             cam = manager.get_camera(camera)
 
-            async def _get_device_type():
-                return await cam.get_parsed("magicBox.cgi?action=getDeviceType")
+            async def _get_system_info():
+                return await cam.get_parsed("magicBox.cgi?action=getSystemInfo")
 
             async def _get_audio_input():
                 try:
@@ -337,12 +339,16 @@ def register_tools(mcp, config):
                 except Exception:
                     return None
 
-            device_type, audio_input, audio_output = await asyncio.gather(
-                _get_device_type(), _get_audio_input(), _get_audio_output()
+            system_info, audio_input, audio_output = await asyncio.gather(
+                _get_system_info(), _get_audio_input(), _get_audio_output()
             )
 
+            device_type = system_info.get("deviceType", "unknown")
+            update_serial = system_info.get("updateSerial", "")
+
             result = {
-                "device_type": device_type.get("type", "unknown"),
+                "device_type": device_type,
+                "update_serial": update_serial,
             }
 
             # Mic capability
@@ -353,12 +359,21 @@ def register_tools(mcp, config):
             else:
                 result["mic"] = False
 
-            # Speaker capability
+            # Speaker capability: check devAudioOutput caps first, then model suffix
             if audio_output:
                 result["speaker"] = True
-                result["audio_output"] = audio_output
+                result["speaker_source"] = "devAudioOutput"
             else:
-                result["speaker"] = False
+                # Fallback: check model suffix for speaker indicators
+                # AS/ASE = Audio Speaker, PV = Active deterrence (siren/speaker)
+                serial_upper = update_serial.upper()
+                parts = serial_upper.replace("-", " ").split()
+                has_speaker = any(p in ("AS", "ASE", "PV") for p in parts) or any(
+                    p.startswith("PV") for p in parts
+                )
+                result["speaker"] = has_speaker
+                if has_speaker:
+                    result["speaker_source"] = "model_suffix"
 
             return result
         except Exception as e:
