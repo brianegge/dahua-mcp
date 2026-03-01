@@ -9,6 +9,7 @@ class CameraConfig(BaseModel):
     username: str = Field(..., description="Camera username")
     password: str = Field(..., description="Camera password")
     verify_ssl: bool = Field(False, description="Verify SSL certificates")
+    type: str = Field("camera", description="Device type: 'camera' or 'nvr'")
 
 
 class DahuaConfig(BaseModel):

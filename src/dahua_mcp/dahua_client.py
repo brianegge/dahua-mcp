@@ -128,9 +128,14 @@ class DahuaCameraManager:
         return self._cameras[name]
 
     def list_cameras(self) -> list[dict[str, Any]]:
-        """List all cameras (name, host, port only — no credentials)."""
+        """List all cameras (name, host, port, type — no credentials)."""
         return [
-            {"name": c.config.name, "host": c.config.host, "port": c.config.port}
+            {
+                "name": c.config.name,
+                "host": c.config.host,
+                "port": c.config.port,
+                "type": c.config.type,
+            }
             for c in self._cameras.values()
         ]
 
