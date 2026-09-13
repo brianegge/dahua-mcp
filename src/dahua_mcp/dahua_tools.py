@@ -6,12 +6,29 @@ import asyncio
 import base64
 import contextlib
 import json
+import os
+import re
+import tempfile
+import time
+import uuid
+from pathlib import Path
 from typing import Annotated
 
 from fastmcp import Context
 from pydantic import Field
 
 from dahua_mcp.dahua_client import DahuaCameraManager
+from dahua_mcp.utils import build_config_query
+from dahua_mcp.utils import parse_storage_info
+
+
+def _snapshot_dir() -> Path:
+    """Directory snapshots are written to (DAHUA_SNAPSHOT_DIR, else a temp dir)."""
+    path = Path(
+        os.getenv("DAHUA_SNAPSHOT_DIR") or Path(tempfile.gettempdir()) / "dahua-mcp"
+    )
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _error_str(e: Exception) -> str:
@@ -625,8 +642,13 @@ def register_tools(mcp, config):
         """
         Set configuration values on a camera. This is the generic config setter.
 
-        Each key-value pair is sent as a setConfig parameter.
+        Each key-value pair is sent as a setConfig parameter. Values are
+        percent-encoded, so they may safely contain spaces, "&" or "=".
         Example: set_config("front-door", {"MotionDetect[0].Enable": "true"})
+
+        Pass an empty string to clear a field. Dahua firmware ignores a bare
+        "Key=" (it answers OK but changes nothing), so "" is sent as a single
+        space, which the device trims back to "".
 
         Args:
             camera: Camera name from list_cameras.
@@ -639,7 +661,7 @@ def register_tools(mcp, config):
             parsed = json.loads(params) if isinstance(params, str) else params
             await ctx.info(f"Setting config on {camera}: {parsed}...")
             cam = manager.get_camera(camera)
-            param_str = "&".join(f"{k}={v}" for k, v in parsed.items())
+            param_str = build_config_query(parsed)
             return await cam.get_parsed(
                 f"configManager.cgi?action=setConfig&{param_str}"
             )
@@ -797,31 +819,232 @@ def register_tools(mcp, config):
                 description="Channel number (default: 1). Note: channel is 1-based for snapshots.",
             ),
         ] = 1,
+        return_base64: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Also return the image inline as base64. Off by default: a "
+                    "4K JPEG is ~1 MB, which is far larger than most model "
+                    "context windows allow."
+                ),
+            ),
+        ] = False,
         ctx: Context = None,
     ) -> dict:
         """
-        Take a JPEG snapshot from a camera. Returns base64-encoded image data.
+        Take a JPEG snapshot and save it to disk, returning the file path.
+
+        A full-resolution snapshot is around a megabyte; returning it inline as
+        base64 overflows a typical context window, so by default the image is
+        written to DAHUA_SNAPSHOT_DIR (a temp directory if unset) and only the
+        path is returned. Set return_base64=True if you genuinely need the bytes
+        inline.
 
         Args:
             camera: Camera name from list_cameras.
             channel: Channel number, 1-based (default: 1).
+            return_base64: Include the image inline as base64 (default: False).
 
         Returns:
-            dict: {"image_base64": "...", "content_type": "image/jpeg", "size_bytes": N}
+            dict: {"path": "...", "content_type": "image/jpeg", "size_bytes": N}
         """
         try:
             await ctx.info(f"Taking snapshot from {camera} channel {channel}...")
             cam = manager.get_camera(camera)
             data = await cam.get_bytes(f"snapshot.cgi?channel={channel}")
-            encoded = base64.b64encode(data).decode("ascii")
-            return {
-                "image_base64": encoded,
+
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", camera)
+            filename = (
+                f"{safe_name}-ch{channel}-{time.strftime('%Y%m%d-%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}.jpg"
+            )
+            path = _snapshot_dir() / filename
+            path.write_bytes(data)
+
+            result = {
+                "path": str(path),
                 "content_type": "image/jpeg",
                 "size_bytes": len(data),
             }
+            if return_base64:
+                result["image_base64"] = base64.b64encode(data).decode("ascii")
+            return result
         except Exception as e:
             await ctx.error(f"Error taking snapshot: {_error_str(e)}")
             return {"error": _error_str(e)}
+
+    ##########################
+    # Storage / recordings
+    ##########################
+
+    @mcp.tool(
+        tags={"dahua", "storage", "read-only"},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_storage_info(
+        camera: Annotated[
+            str,
+            Field(description="Camera or NVR name from list_cameras"),
+        ],
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Get hard drive status and capacity from a recorder.
+
+        Returns one entry per physical device with its partitions rolled up,
+        a total/free capacity, and a "healthy" flag derived from the device
+        state plus each partition's error flag.
+
+        Note: a Dahua recorder pre-allocates the whole disk when it formats, so
+        used == total even on a brand new drive. That is not a full disk. Use
+        find_recordings to confirm footage is actually being written.
+
+        Args:
+            camera: Camera or NVR name from list_cameras.
+
+        Returns:
+            dict: {"devices": [...], "device_count": N}
+        """
+        try:
+            await ctx.info(f"Getting storage info from {camera}...")
+            cam = manager.get_camera(camera)
+            raw = await cam.get_raw("storageDevice.cgi?action=getDeviceAllInfo")
+            return parse_storage_info(raw)
+        except Exception as e:
+            await ctx.error(f"Error getting storage info: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "storage", "read-only"},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def find_recordings(
+        camera: Annotated[
+            str,
+            Field(description="Camera or NVR name from list_cameras"),
+        ],
+        start_time: Annotated[
+            str,
+            Field(description="Start time as 'YYYY-MM-DD HH:MM:SS'"),
+        ],
+        end_time: Annotated[
+            str,
+            Field(description="End time as 'YYYY-MM-DD HH:MM:SS'"),
+        ],
+        channel: Annotated[
+            int,
+            Field(
+                default=1,
+                description="Channel number, 1-based (channel 0 is rejected by the firmware)",
+            ),
+        ] = 1,
+        count: Annotated[
+            int,
+            Field(default=20, description="Max number of files to return"),
+        ] = 20,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        List recorded video files, to confirm a recorder is really recording.
+
+        Uses the 4-step mediaFileFind API (factory.create / findFile /
+        findNextFile / close+destroy). Dahua marks each filename with its
+        record type: [R] regular/continuous, [M] motion, [A] alarm.
+
+        Args:
+            camera: Camera or NVR name from list_cameras.
+            start_time: Start time as 'YYYY-MM-DD HH:MM:SS'.
+            end_time: End time as 'YYYY-MM-DD HH:MM:SS'.
+            channel: Channel number, 1-based (default: 1).
+            count: Max number of files to return (default: 20).
+
+        Returns:
+            dict: {"found": N, "channel": N, "files": [{"path", "start_time", ...}]}
+        """
+        finder = None
+        cam = None
+        try:
+            await ctx.info(
+                f"Finding recordings on {camera} channel {channel} "
+                f"from {start_time} to {end_time}..."
+            )
+            cam = manager.get_camera(camera)
+
+            created = await cam.get_raw("mediaFileFind.cgi?action=factory.create")
+            if "=" not in created:
+                return {
+                    "error": "Could not create a media file finder",
+                    "raw": created.strip(),
+                }
+            finder = created.split("=", 1)[1].strip()
+
+            await cam.get_raw(
+                f"mediaFileFind.cgi?action=findFile&object={finder}"
+                f"&condition.Channel={channel}"
+                f"&condition.StartTime={start_time}"
+                f"&condition.EndTime={end_time}"
+            )
+            listing = await cam.get_parsed(
+                f"mediaFileFind.cgi?action=findNextFile&object={finder}&count={count}"
+            )
+
+            files: dict[int, dict] = {}
+            found = 0
+            for key, value in listing.items():
+                if key == "found":
+                    with contextlib.suppress(ValueError):
+                        found = int(value)
+                    continue
+                m = re.match(r"items\[(\d+)\]\.(.+)", key)
+                if not m:
+                    continue
+                entry = files.setdefault(int(m.group(1)), {})
+                field = m.group(2)
+                if field == "FilePath":
+                    entry["path"] = value
+                elif field == "StartTime":
+                    entry["start_time"] = value
+                elif field == "EndTime":
+                    entry["end_time"] = value
+                elif field == "Length":
+                    entry["size_bytes"] = value
+                else:
+                    entry[field[0].lower() + field[1:]] = value
+
+            ordered = [files[i] for i in sorted(files)]
+            for entry in ordered:
+                path = entry.get("path", "")
+                entry["record_type"] = (
+                    "regular"
+                    if "[R]" in path
+                    else "motion"
+                    if "[M]" in path
+                    else "alarm"
+                    if "[A]" in path
+                    else "unknown"
+                )
+
+            return {"found": found, "channel": channel, "files": ordered}
+        except Exception as e:
+            await ctx.error(f"Error finding recordings: {_error_str(e)}")
+            return {"error": _error_str(e)}
+        finally:
+            if finder and cam is not None:
+                with contextlib.suppress(Exception):
+                    await cam.get_raw(f"mediaFileFind.cgi?action=close&object={finder}")
+                with contextlib.suppress(Exception):
+                    await cam.get_raw(
+                        f"mediaFileFind.cgi?action=destroy&object={finder}"
+                    )
 
     ##########################
     # Logs

@@ -177,6 +177,7 @@ All settings beyond camera credentials are configured via environment variables:
 |----------|---------|-------------|
 | `DAHUA_CAMERAS_CONFIG` | `~/.config/dahua-mcp/cameras.yaml` | Path to cameras config file (JSON or YAML). Auto-discovers from `~/.config/dahua-mcp/` if not set. |
 | `DAHUA_TIMEOUT` | `20` | HTTP request timeout in seconds |
+| `DAHUA_SNAPSHOT_DIR` | system temp dir | Directory `take_snapshot` writes JPEGs to |
 | `READ_ONLY_MODE` | `false` | Disable all write tools (reboot, set_config, etc.) |
 | `DISABLED_TAGS` | — | Comma-separated tags to disable (e.g. `destructive,write`) |
 | `LOG_LEVEL` | `INFO` | Logging level |
@@ -232,13 +233,39 @@ All settings beyond camera credentials are configured via environment variables:
 | Tool | Description | Destructive |
 |------|-------------|-------------|
 | `reboot` | Reboot the camera | Yes |
-| `take_snapshot` | Take a JPEG snapshot (base64) | No |
+| `take_snapshot` | Take a JPEG snapshot, saved to disk (returns the path) | No |
+
+### Storage / Recordings
+
+| Tool | Description | Read-Only |
+|------|-------------|-----------|
+| `get_storage_info` | Hard drive status, capacity and health | Yes |
+| `find_recordings` | List recorded files, to confirm a recorder is recording | Yes |
 
 ### Logs
 
 | Tool | Description | Read-Only |
 |------|-------------|-----------|
 | `search_logs` | Search camera logs by time range and type | Yes |
+
+## Firmware quirks
+
+Behaviours confirmed against an NV4116-HS, handled by the server so callers do
+not have to:
+
+- **Clearing a config field.** Sending `Key=` with an empty value returns `OK`
+  and changes nothing. Pass `""` to `set_config` and it is sent as a single
+  space, which the device trims back to `""`.
+- **`&` cannot appear in a config value.** The firmware percent-decodes the
+  whole query string *before* splitting it on `&`, so an encoded `&` still
+  terminates the value — the request either returns HTTP 400 or the value is
+  silently truncated. `set_config` raises a clear error instead. `#`, `+`, `%`,
+  `=`, `/` and `'` are all fine and round-trip correctly.
+- **`used == total` on a healthy disk.** A recorder pre-allocates the whole
+  drive into fixed-size blocks when it formats, so even a brand new disk reports
+  100% used. `get_storage_info` flags this so it is not mistaken for a full
+  disk; use `find_recordings` to confirm writes are landing.
+- **`find_recordings` channels are 1-based.** Channel `0` is rejected.
 
 ## Development
 
