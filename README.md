@@ -250,8 +250,13 @@ All settings beyond camera credentials are configured via environment variables:
 
 ## Firmware quirks
 
-Behaviours confirmed against an NV4116-HS, handled by the server so callers do
-not have to:
+The device protocol lives in [aiodahua](https://github.com/brianegge/aiodahua),
+which this server is a thin MCP layer over. That is where the digest/basic auth
+negotiation, the CGI parsing and the firmware quirks are implemented and
+tested, so the Home Assistant integration and this server share one
+implementation instead of two.
+
+Behaviours confirmed against real hardware, handled for you:
 
 - **Clearing a config field.** Sending `Key=` with an empty value returns `OK`
   and changes nothing. Pass `""` to `set_config` and it is sent as a single
@@ -266,6 +271,15 @@ not have to:
   100% used. `get_storage_info` flags this so it is not mistaken for a full
   disk; use `find_recordings` to confirm writes are landing.
 - **`find_recordings` channels are 1-based.** Channel `0` is rejected.
+- **A missing endpoint is an error body, not a 404.** Older firmware answers
+  `Bad Request!`, 2024 builds answer `Not Implemented!` with HTTP 501, and some
+  failures arrive as HTTP 200 with an error body that would otherwise parse
+  into a plausible-looking dict.
+- **Some devices only accept basic auth.** Digest is tried first and the
+  fallback is automatic.
+- **A Lorex E891AB reboots if asked for `audio.cgi`**, dropping HTTP and RTSP
+  for ~105 seconds. The library refuses that request on the brands known to do
+  it.
 
 ## Development
 
