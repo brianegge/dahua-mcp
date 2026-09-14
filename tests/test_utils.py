@@ -77,110 +77,43 @@ class TestParseDahuaResponse:
         assert result["hardwareVersion"] == "1.00"
 
 
-class TestEncodeConfigValue:
-    def test_empty_becomes_space(self):
-        """Dahua ignores a bare 'Key='; a space is how a field is cleared."""
+class TestReExports:
+    """The protocol helpers moved to aiodahua and are re-exported from here.
+
+    aiodahua tests their behaviour exhaustively -- the value-encoding quirks,
+    the storage pre-allocation note, the byte formatting. What matters at this
+    layer is that the names still resolve and still do the job, so a tool
+    importing them does not break.
+    """
+
+    def test_encode_config_value_clears_with_a_space(self):
+        # Sending an empty value is silently ignored by the firmware.
         assert encode_config_value("") == "%20"
 
-    def test_none_becomes_space(self):
-        assert encode_config_value(None) == "%20"
+    def test_encode_config_value_still_rejects_ampersand(self):
+        with pytest.raises(ValueError, match="&"):
+            encode_config_value("Bill & Ted")
 
-    def test_spaces_are_encoded_colons_are_not(self):
-        assert encode_config_value("1 00:00:00-24:00:00") == "1%2000:00:00-24:00:00"
+    def test_build_config_query_joins_pairs(self):
+        assert build_config_query({"General.MachineName": "front door"}) == (
+            "General.MachineName=front%20door"
+        )
 
-    def test_structural_characters_are_escaped(self):
-        assert encode_config_value("50%") == "50%25"
+    def test_format_bytes(self):
+        assert format_bytes(1_500_000_000) == "1.50 GB"
 
-    def test_non_string_is_coerced(self):
-        assert encode_config_value(15) == "15"
-
-
-class TestBuildConfigQuery:
-    def test_keys_are_left_literal(self):
-        """Config paths contain [] : . which the firmware needs unencoded."""
-        q = build_config_query({"RemoteDevice[0].VideoInputs[0].Name": "Lobby"})
-        assert q == "RemoteDevice[0].VideoInputs[0].Name=Lobby"
-
-    def test_multiple_pairs_joined_with_ampersand(self):
-        q = build_config_query({"A": "1", "B": "2"})
-        assert q == "A=1&B=2"
-
-    def test_empty_value_clears_field(self):
-        assert build_config_query({"A.Name": ""}) == "A.Name=%20"
-
-
-class TestFormatBytes:
-    def test_units(self):
-        assert format_bytes(512) == "512 B"
-        assert format_bytes(7921284939776) == "7.92 TB"
-        assert format_bytes(2000324395008) == "2.00 TB"
-
-    def test_zero(self):
-        assert format_bytes(0) == "0 B"
-
-
-STORAGE_SAMPLE = """list.info[0].Detail[0].TotalBytes=2000324395008.000000
-list.info[0].Detail[0].UsedBytes=2000324395008.000000
-list.info[0].Detail[0].IsError=false
-list.info[0].Detail[0].Path=/dev/sda0
-list.info[0].Detail[1].TotalBytes=1920311754752.000000
-list.info[0].Detail[1].UsedBytes=1920311754752.000000
-list.info[0].Detail[1].IsError=false
-list.info[0].Detail[1].Path=/dev/sda1
-list.info[0].Name=/dev/sda
-list.info[0].State=Success
-list.info[0].HealthDataFlag=0"""
-
-
-class TestParseStorageInfo:
-    def test_rolls_partitions_into_one_device(self):
-        result = parse_storage_info(STORAGE_SAMPLE)
+    def test_parse_storage_info_keeps_the_mcp_shape(self):
+        """aiodahua returns the device list; the tool's shape wraps it."""
+        text = (
+            "list.info[0].Name=/dev/sda\r\n"
+            "list.info[0].State=Success\r\n"
+            "list.info[0].Detail[0].TotalBytes=1000000000\r\n"
+            "list.info[0].Detail[0].UsedBytes=400000000\r\n"
+            "list.info[0].Detail[0].Path=/dev/sda0\r\n"
+        )
+        result = parse_storage_info(text)
         assert result["device_count"] == 1
-        dev = result["devices"][0]
-        assert dev["name"] == "/dev/sda"
-        assert dev["state"] == "Success"
-        assert len(dev["partitions"]) == 2
-        assert dev["total_bytes"] == 2000324395008 + 1920311754752
-        assert dev["total_human"] == "3.92 TB"
-
-    def test_healthy_when_no_partition_errors(self):
-        dev = parse_storage_info(STORAGE_SAMPLE)["devices"][0]
-        assert dev["healthy"] is True
-        assert dev["partition_errors"] == []
-
-    def test_unhealthy_on_partition_error(self):
-        bad = STORAGE_SAMPLE.replace(
-            "list.info[0].Detail[1].IsError=false",
-            "list.info[0].Detail[1].IsError=true",
-        )
-        dev = parse_storage_info(bad)["devices"][0]
-        assert dev["healthy"] is False
-        assert dev["partition_errors"] == ["/dev/sda1"]
-
-    def test_preallocation_note_present_when_full(self):
-        """A freshly formatted Dahua disk reports used == total."""
-        dev = parse_storage_info(STORAGE_SAMPLE)["devices"][0]
-        assert "pre-allocates" in dev["note"]
-
-    def test_no_note_when_space_is_free(self):
-        partial = STORAGE_SAMPLE.replace(
-            "list.info[0].Detail[0].UsedBytes=2000324395008.000000",
-            "list.info[0].Detail[0].UsedBytes=1000000000000.000000",
-        )
-        dev = parse_storage_info(partial)["devices"][0]
-        assert "note" not in dev
-        assert dev["free_bytes"] > 0
-
-    def test_empty_response(self):
-        assert parse_storage_info("")["device_count"] == 0
-
-    def test_ampersand_raises_rather_than_corrupting(self):
-        """Firmware decodes before splitting on '&', so it cannot be escaped."""
-        with pytest.raises(ValueError, match="cannot contain"):
-            encode_config_value("a&b")
-
-    def test_characters_the_firmware_accepts_once_encoded(self):
-        # Confirmed round-tripping on an NV4116-HS.
-        assert encode_config_value("a#b") == "a%23b"
-        assert encode_config_value("a+b") == "a%2Bb"
-        assert encode_config_value("a=b") == "a%3Db"
+        device = result["devices"][0]
+        assert device["name"] == "/dev/sda"
+        assert device["free_human"] == "600.00 MB"
+        assert device["healthy"] is True

@@ -1,9 +1,8 @@
 import json
-from unittest.mock import AsyncMock
 
-import httpx
 import pytest
 import yaml
+from aiodahua import DahuaClient
 
 from dahua_mcp.dahua_client import DahuaCamera
 from dahua_mcp.dahua_client import DahuaCameraManager
@@ -194,67 +193,65 @@ class TestDahuaCameraAuthFallback:
         return DahuaCamera(config)
 
     @pytest.mark.asyncio
-    async def test_starts_with_digest_auth(self):
+    async def test_wraps_an_aiodahua_client(self):
+        """The transport is aiodahua's now, configured from CameraConfig."""
         cam = self._make_camera()
-        assert cam._use_basic_auth is False
-        await cam._ensure_client()
-        assert isinstance(cam.client.auth, httpx.DigestAuth)
+        assert isinstance(cam.client, DahuaClient)
+        assert cam.client.host == "192.168.1.100"
+        assert cam.base_url == "http://192.168.1.100:80"
         await cam.close()
 
     @pytest.mark.asyncio
-    async def test_fallback_to_basic_on_401(self):
-        cam = self._make_camera()
-        await cam._ensure_client()
+    async def test_basic_auth_fallback_is_available(self):
+        """The fallback this class used to implement lives in the library.
 
-        resp_401 = httpx.Response(401, request=httpx.Request("GET", "http://test"))
-        resp_200 = httpx.Response(
-            200, request=httpx.Request("GET", "http://test"), text="OK"
+        Kept as a test here because losing it would silently break the devices
+        that accept nothing but basic -- the reason it was written.
+        """
+        cam = self._make_camera()
+        assert cam.client._basic_auth_fallback is True
+        assert cam.client._use_basic_auth is False
+        await cam.close()
+
+    @pytest.mark.asyncio
+    async def test_verify_ssl_is_passed_through(self):
+        config = CameraConfig(
+            name="nvr",
+            host="192.168.1.4",
+            port=443,
+            username="admin",
+            password="pass",
+            verify_ssl=False,
         )
-
-        # Mock the first client's get to return 401
-        cam.client.get = AsyncMock(return_value=resp_401)
-
-        # Patch _recreate_client_with_basic to swap auth but keep mock client
-        async def mock_recreate():
-            cam._use_basic_auth = True
-            cam.client.auth = httpx.BasicAuth(cam.config.username, cam.config.password)
-            # After switching, the next get should succeed
-            cam.client.get = AsyncMock(return_value=resp_200)
-
-        cam._recreate_client_with_basic = mock_recreate
-
-        resp = await cam._get("magicBox.cgi", {"action": "getDeviceType"})
-        assert resp.status_code == 200
-        assert cam._use_basic_auth is True
-        assert isinstance(cam.client.auth, httpx.BasicAuth)
+        cam = DahuaCamera(config)
+        # An Amcrest NV4108E-HS redirects port 80 to a self-signed HTTPS
+        # endpoint, so this is the difference between working and not.
+        assert cam.client._ssl is False
+        assert cam.base_url == "https://192.168.1.4:443"
         await cam.close()
 
     @pytest.mark.asyncio
-    async def test_no_fallback_when_already_basic(self):
+    async def test_get_parsed_strips_the_table_prefix(self):
+        """The MCP output shape predates aiodahua and has to survive it."""
         cam = self._make_camera()
-        cam._use_basic_auth = True
-        await cam._ensure_client()
 
-        # Basic auth also returns 401 — should raise, not retry
-        resp_401 = httpx.Response(401, request=httpx.Request("GET", "http://test"))
-        cam.client.get = AsyncMock(return_value=resp_401)
+        async def fake_get_text(endpoint):
+            return "table.General.MachineName=front-door\r\nstatus.Foo=1"
 
-        with pytest.raises(RuntimeError, match="HTTP 401"):
-            await cam._get("magicBox.cgi", {"action": "getDeviceType"})
+        cam.client.async_get_text = fake_get_text
+        assert await cam.get_parsed("configManager.cgi?action=getConfig") == {
+            "General.MachineName": "front-door",
+            "Foo": "1",
+        }
         await cam.close()
 
     @pytest.mark.asyncio
-    async def test_digest_auth_succeeds_no_fallback(self):
+    async def test_get_raw_returns_the_body_untouched(self):
         cam = self._make_camera()
-        await cam._ensure_client()
 
-        resp_200 = httpx.Response(
-            200, request=httpx.Request("GET", "http://test"), text="OK"
-        )
-        cam.client.get = AsyncMock(return_value=resp_200)
+        async def fake_get_text(endpoint):
+            return "table.General.MachineName=front-door"
 
-        resp = await cam._get("magicBox.cgi", {"action": "getDeviceType"})
-        assert resp.status_code == 200
-        assert cam._use_basic_auth is False
-        assert isinstance(cam.client.auth, httpx.DigestAuth)
+        cam.client.async_get_text = fake_get_text
+        assert await cam.get_raw("x.cgi") == "table.General.MachineName=front-door"
         await cam.close()

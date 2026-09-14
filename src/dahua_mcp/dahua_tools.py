@@ -4,7 +4,6 @@ Dahua MCP Server Tools
 
 import asyncio
 import base64
-import contextlib
 import json
 import os
 import re
@@ -14,12 +13,11 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
+from aiodahua import build_config_query
 from fastmcp import Context
 from pydantic import Field
 
 from dahua_mcp.dahua_client import DahuaCameraManager
-from dahua_mcp.utils import build_config_query
-from dahua_mcp.utils import parse_storage_info
 
 
 def _snapshot_dir() -> Path:
@@ -852,7 +850,7 @@ def register_tools(mcp, config):
         try:
             await ctx.info(f"Taking snapshot from {camera} channel {channel}...")
             cam = manager.get_camera(camera)
-            data = await cam.get_bytes(f"snapshot.cgi?channel={channel}")
+            data = await cam.client.async_get_snapshot(channel)
 
             safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", camera)
             filename = (
@@ -913,8 +911,8 @@ def register_tools(mcp, config):
         try:
             await ctx.info(f"Getting storage info from {camera}...")
             cam = manager.get_camera(camera)
-            raw = await cam.get_raw("storageDevice.cgi?action=getDeviceAllInfo")
-            return parse_storage_info(raw)
+            devices = await cam.client.async_get_storage_info()
+            return {"devices": devices, "device_count": len(devices)}
         except Exception as e:
             await ctx.error(f"Error getting storage info: {_error_str(e)}")
             return {"error": _error_str(e)}
@@ -970,81 +968,19 @@ def register_tools(mcp, config):
         Returns:
             dict: {"found": N, "channel": N, "files": [{"path", "start_time", ...}]}
         """
-        finder = None
-        cam = None
         try:
             await ctx.info(
                 f"Finding recordings on {camera} channel {channel} "
                 f"from {start_time} to {end_time}..."
             )
             cam = manager.get_camera(camera)
-
-            created = await cam.get_raw("mediaFileFind.cgi?action=factory.create")
-            if "=" not in created:
-                return {
-                    "error": "Could not create a media file finder",
-                    "raw": created.strip(),
-                }
-            finder = created.split("=", 1)[1].strip()
-
-            await cam.get_raw(
-                f"mediaFileFind.cgi?action=findFile&object={finder}"
-                f"&condition.Channel={channel}"
-                f"&condition.StartTime={start_time}"
-                f"&condition.EndTime={end_time}"
+            found, files = await cam.client.async_find_recordings(
+                start_time, end_time, channel=channel, count=count
             )
-            listing = await cam.get_parsed(
-                f"mediaFileFind.cgi?action=findNextFile&object={finder}&count={count}"
-            )
-
-            files: dict[int, dict] = {}
-            found = 0
-            for key, value in listing.items():
-                if key == "found":
-                    with contextlib.suppress(ValueError):
-                        found = int(value)
-                    continue
-                m = re.match(r"items\[(\d+)\]\.(.+)", key)
-                if not m:
-                    continue
-                entry = files.setdefault(int(m.group(1)), {})
-                field = m.group(2)
-                if field == "FilePath":
-                    entry["path"] = value
-                elif field == "StartTime":
-                    entry["start_time"] = value
-                elif field == "EndTime":
-                    entry["end_time"] = value
-                elif field == "Length":
-                    entry["size_bytes"] = value
-                else:
-                    entry[field[0].lower() + field[1:]] = value
-
-            ordered = [files[i] for i in sorted(files)]
-            for entry in ordered:
-                path = entry.get("path", "")
-                entry["record_type"] = (
-                    "regular"
-                    if "[R]" in path
-                    else "motion"
-                    if "[M]" in path
-                    else "alarm"
-                    if "[A]" in path
-                    else "unknown"
-                )
-
-            return {"found": found, "channel": channel, "files": ordered}
+            return {"found": found, "channel": channel, "files": files}
         except Exception as e:
             await ctx.error(f"Error finding recordings: {_error_str(e)}")
             return {"error": _error_str(e)}
-        finally:
-            if finder and cam is not None:
-                with contextlib.suppress(Exception):
-                    await cam.get_raw(f"mediaFileFind.cgi?action=close&object={finder}")
-                with contextlib.suppress(Exception):
-                    await cam.get_raw(
-                        f"mediaFileFind.cgi?action=destroy&object={finder}"
-                    )
 
     ##########################
     # Logs
@@ -1109,36 +1045,10 @@ def register_tools(mcp, config):
                 f"Searching logs on {camera} from {start_time} to {end_time}..."
             )
             cam = manager.get_camera(camera)
-            lt = log_type or "All"
-
-            # Step 1: startFind
-            start_resp = await cam.get_raw(
-                f"log.cgi?action=startFind&condition.Channel=0&condition.Types=[{lt}]"
-                f"&condition.StartTime={start_time}&condition.EndTime={end_time}"
+            entries = await cam.client.async_search_logs(
+                start_time, end_time, log_type=log_type or "All", count=count
             )
-            # Extract token from response
-            token = None
-            for line in start_resp.strip().splitlines():
-                if "token" in line.lower() and "=" in line:
-                    token = line.split("=", 1)[1].strip()
-                    break
-
-            if not token:
-                return {
-                    "error": "Failed to start log search — no token returned",
-                    "raw": start_resp,
-                }
-
-            # Step 2: doFind
-            find_resp = await cam.get_parsed(
-                f"log.cgi?action=doFind&token={token}&count={count}"
-            )
-
-            # Step 3: stopFind (best-effort cleanup)
-            with contextlib.suppress(Exception):
-                await cam.get_raw(f"log.cgi?action=stopFind&token={token}")
-
-            return find_resp
+            return {"count": len(entries), "entries": entries}
         except Exception as e:
             await ctx.error(f"Error searching logs: {_error_str(e)}")
             return {"error": _error_str(e)}
