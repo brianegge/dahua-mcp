@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
+from aiodahua import async_discover
 from aiodahua import build_config_query
 from fastmcp import Context
 from pydantic import Field
@@ -71,6 +72,101 @@ def register_tools(mcp, config):
             }
         except Exception as e:
             await ctx.error(f"Error listing cameras: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "discovery", "read-only"},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def discover_devices(
+        targets: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Addresses to query. Omit to multicast/broadcast on this "
+                    "host's own segment. Pass unicast addresses to probe "
+                    "specific hosts across a routed network."
+                ),
+            ),
+        ] = None,
+        source_ip: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Local address to send from. Required on a multi-homed "
+                    "host to aim the query at the camera VLAN."
+                ),
+            ),
+        ] = None,
+        mac: Annotated[
+            str | None,
+            Field(default=None, description="Restrict the query to one MAC."),
+        ] = None,
+        timeout: Annotated[
+            float,
+            Field(
+                default=3.0, ge=0.5, le=30.0, description="Seconds to collect replies."
+            ),
+        ] = 3.0,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Find Dahua devices on the network, including ones not in cameras.yaml.
+
+        Uses DHDiscover (UDP 37810), which needs no credentials and answers
+        even from a device on the wrong subnet -- so this finds a
+        factory-default camera that has no DHCP lease, no ARP entry, and does
+        not respond to a ping sweep.
+
+        Scope: a multicast/broadcast query only reaches the sending host's own
+        layer-2 segment. To find unknown devices on a camera VLAN, run from a
+        host on that VLAN, or pass unicast addresses in `targets`, which do
+        follow normal routing.
+
+        Args:
+            targets: Addresses to query; defaults to multicast + broadcast.
+            source_ip: Local source address, to pick the segment.
+            mac: Restrict the query to one device.
+            timeout: Seconds to collect replies.
+
+        Returns:
+            dict: List of devices with address, model, serial and DHCP state.
+                `reachable` is False when a device's own IP does not match
+                where it answered from -- i.e. it is on a foreign subnet.
+        """
+        try:
+            await ctx.info("Discovering Dahua devices...")
+            devices = await async_discover(
+                targets=targets, source_ip=source_ip, mac=mac, timeout=timeout
+            )
+            return {
+                "count": len(devices),
+                "devices": [
+                    {
+                        "mac": d.mac,
+                        "ip": d.ip,
+                        "netmask": d.netmask,
+                        "gateway": d.gateway,
+                        "dhcp": d.dhcp,
+                        "device_type": d.device_type,
+                        "serial": d.serial,
+                        "machine_name": d.machine_name,
+                        "version": d.version,
+                        "http_port": d.http_port,
+                        "source_ip": d.source_ip,
+                        "reachable": d.reachable,
+                    }
+                    for d in devices
+                ],
+            }
+        except Exception as e:
+            await ctx.error(f"Error discovering devices: {_error_str(e)}")
             return {"error": _error_str(e)}
 
     ##########################
