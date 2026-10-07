@@ -580,6 +580,48 @@ def register_tools(mcp, config):
             "idempotentHint": True,
         },
     )
+    async def get_exposure(
+        camera: Annotated[
+            str,
+            Field(description="Camera name from list_cameras"),
+        ],
+        channel: Annotated[
+            int,
+            Field(default=0, description="Channel number (default: 0)"),
+        ] = 0,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Get exposure settings per day/night profile: mode, shutter range, gain.
+
+        The shutter range is reported even in auto mode, where the camera
+        ignores it; "shutter_range_applies" says whether it is in force.
+        "slowest" is the slowest shutter allowed, as "1/N" of a second -- the
+        figure that decides motion blur.
+
+        Args:
+            camera: Camera name from list_cameras.
+            channel: Channel number (default: 0).
+
+        Returns:
+            dict: {"profiles": [{"name": "day", "mode_name": ..., "slowest": "1/60", ...}]}
+        """
+        try:
+            await ctx.info(f"Getting exposure for {camera} channel {channel}...")
+            cam = manager.get_camera(camera)
+            return {"profiles": await cam.client.async_get_exposure(channel)}
+        except Exception as e:
+            await ctx.error(f"Error getting exposure: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "config", "read-only"},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
     async def get_video_in_mode(
         camera: Annotated[
             str,
@@ -809,6 +851,104 @@ def register_tools(mcp, config):
             )
         except Exception as e:
             await ctx.error(f"Error toggling motion detection: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "config", "write"},
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def set_shutter_range(
+        camera: Annotated[
+            str,
+            Field(description="Camera name from list_cameras"),
+        ],
+        slowest: Annotated[
+            str,
+            Field(
+                description=(
+                    'Slowest shutter allowed, as a fraction of a second ("1/60") '
+                    'or milliseconds ("16.67")'
+                )
+            ),
+        ],
+        fastest: Annotated[
+            str,
+            Field(
+                default="0.1",
+                description="Fastest shutter allowed, same format (default: 0.1 ms)",
+            ),
+        ] = "0.1",
+        channel: Annotated[
+            int,
+            Field(default=0, description="Channel number (default: 0)"),
+        ] = 0,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Cap how slow the shutter may go, on every day/night profile, to cut motion blur.
+
+        Exposure and gain stay automatic inside the range. A faster shutter is
+        paid for with gain, so expect more noise in dim light. Undo with
+        set_exposure_auto.
+
+        Args:
+            camera: Camera name from list_cameras.
+            slowest: Slowest shutter allowed, e.g. "1/60" or "16.67".
+            fastest: Fastest shutter allowed (default "0.1" ms).
+            channel: Channel number (default: 0).
+
+        Returns:
+            dict: {"ok": bool, "profiles": [...]} -- the settings read back.
+        """
+        try:
+            await ctx.info(f"Capping shutter on {camera} at {slowest}...")
+            cam = manager.get_camera(camera)
+            ok = await cam.client.async_set_shutter_range(slowest, fastest, channel)
+            return {"ok": ok, "profiles": await cam.client.async_get_exposure(channel)}
+        except Exception as e:
+            await ctx.error(f"Error setting shutter range: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "config", "write"},
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def set_exposure_auto(
+        camera: Annotated[
+            str,
+            Field(description="Camera name from list_cameras"),
+        ],
+        channel: Annotated[
+            int,
+            Field(default=0, description="Channel number (default: 0)"),
+        ] = 0,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Hand exposure back to the camera on every profile (undoes set_shutter_range).
+
+        Args:
+            camera: Camera name from list_cameras.
+            channel: Channel number (default: 0).
+
+        Returns:
+            dict: {"ok": bool, "profiles": [...]} -- the settings read back.
+        """
+        try:
+            await ctx.info(f"Setting auto exposure on {camera}...")
+            cam = manager.get_camera(camera)
+            ok = await cam.client.async_set_exposure_auto(channel)
+            return {"ok": ok, "profiles": await cam.client.async_get_exposure(channel)}
+        except Exception as e:
+            await ctx.error(f"Error setting auto exposure: {_error_str(e)}")
             return {"error": _error_str(e)}
 
     @mcp.tool(

@@ -4,8 +4,8 @@ requires-python = ">=3.11, <3.15"
 
 [[package]]
 name = "aiodahua"
-version = "0.4.1"
-source = { git = "https://github.com/brianegge/aiodahua?branch=main#f1cae8cf9a3f7d97525f4817ead4e98bcfa3a2ac" }
+version = "0.5.0"
+source = { git = "https://github.com/brianegge/aiodahua?branch=main#a8ffc093b8e37b34d2e1bfbb4105906e65ff7b12" }
 dependencies = [
     { name = "aiohttp" },
     { name = "yarl" },

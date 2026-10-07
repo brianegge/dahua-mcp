@@ -216,6 +216,7 @@ All settings beyond camera credentials are configured via environment variables:
 | `get_config` | Get any config section by name | Yes |
 | `get_motion_detection` | Get motion detection config | Yes |
 | `get_video_in_mode` | Get video input mode (day/night profile) | Yes |
+| `get_exposure` | Get exposure mode, shutter range and gain per day/night profile | Yes |
 | `get_encoding_config` | Get encoding/streaming config | Yes |
 | `get_network_config` | Get network config (IP, gateway, DNS) | Yes |
 | `get_ntp_config` | Get NTP time sync config | Yes |
@@ -226,6 +227,8 @@ All settings beyond camera credentials are configured via environment variables:
 |------|-------------|-------------|
 | `set_config` | Set arbitrary config key-value pairs | Yes |
 | `enable_motion_detection` | Enable/disable motion detection | No |
+| `set_shutter_range` | Cap the slowest shutter (e.g. `1/60`) to cut motion blur | No |
+| `set_exposure_auto` | Hand exposure back to the camera | No |
 | `set_record_mode` | Set recording mode (auto/manual/off) | No |
 
 ### System Control
