@@ -4,23 +4,29 @@ import os
 from pathlib import Path
 from typing import Any
 
-import httpx
 import yaml
+from aiodahua import DahuaClient
+from aiodahua import parse_kv
 
 from dahua_mcp.models import CameraConfig
 from dahua_mcp.models import DahuaConfig
 from dahua_mcp.models import TransportConfig
 from dahua_mcp.utils import parse_bool
-from dahua_mcp.utils import parse_dahua_response
 
 logger = logging.getLogger(__name__)
 
 
 class DahuaCamera:
-    """Async client for a single Dahua/Amcrest camera using HTTP Digest Auth.
+    """One device, wrapped around aiodahua's client.
 
-    Tries digest auth first. If the camera returns 401, falls back to basic
-    auth and remembers the preference for subsequent requests.
+    The transport lives in aiodahua now: digest auth with a basic fallback,
+    the firmware quirks (400 vs 501 for a missing endpoint, error bodies
+    served with HTTP 200), and the self-signed certificates. What stays here
+    is the shape the MCP tools expect -- parsed dicts with the ``table.`` and
+    ``status.`` prefixes stripped.
+
+    ``client`` is the underlying :class:`aiodahua.DahuaClient`, for tools that
+    want its higher-level methods rather than raw CGI.
     """
 
     def __init__(self, config: CameraConfig, timeout: int = 20):
@@ -28,83 +34,29 @@ class DahuaCamera:
         self.timeout = timeout
         protocol = "https" if config.port == 443 else "http"
         self.base_url = f"{protocol}://{config.host}:{config.port}"
-        self._use_basic_auth = False
-        self.client: httpx.AsyncClient | None = None
-
-    def _auth(self) -> httpx.DigestAuth | httpx.BasicAuth:
-        if self._use_basic_auth:
-            return httpx.BasicAuth(self.config.username, self.config.password)
-        return httpx.DigestAuth(self.config.username, self.config.password)
-
-    async def _ensure_client(self):
-        if self.client is None:
-            self.client = httpx.AsyncClient(
-                base_url=self.base_url,
-                auth=self._auth(),
-                verify=self.config.verify_ssl,
-                timeout=self.timeout,
-            )
-
-    async def _recreate_client_with_basic(self):
-        """Switch to basic auth after digest auth fails."""
-        if self.client is not None:
-            await self.client.aclose()
-        self._use_basic_auth = True
-        self.client = httpx.AsyncClient(
-            base_url=self.base_url,
-            auth=self._auth(),
-            verify=self.config.verify_ssl,
-            timeout=self.timeout,
-        )
-        logger.info(
-            "%s (%s): Switched to basic auth after digest auth 401",
-            self.config.name,
-            self.config.host,
+        self.client = DahuaClient(
+            config.host,
+            config.username,
+            config.password,
+            port=config.port,
+            timeout=timeout,
+            verify_ssl=config.verify_ssl,
         )
 
     async def close(self):
-        if self.client is not None:
-            await self.client.aclose()
-            self.client = None
+        await self.client.async_close()
 
-    async def _get(
-        self, endpoint: str, params: dict[str, Any] | None = None
-    ) -> httpx.Response:
-        """GET a CGI endpoint. Falls back to basic auth on 401."""
-        await self._ensure_client()
-        url = f"/cgi-bin/{endpoint}"
-        resp = await self.client.get(url, params=params)
-
-        # If digest auth got 401 and we haven't already switched, try basic
-        if resp.status_code == 401 and not self._use_basic_auth:
-            await self._recreate_client_with_basic()
-            resp = await self.client.get(url, params=params)
-
-        if resp.is_error:
-            raise RuntimeError(
-                f"{self.config.name} ({self.config.host}): "
-                f"HTTP {resp.status_code} on {endpoint}"
-            )
-        return resp
-
-    async def get_parsed(
-        self, endpoint: str, params: dict[str, Any] | None = None
-    ) -> dict:
+    async def get_parsed(self, endpoint: str) -> dict:
         """GET a CGI endpoint and parse key=value response into a dict."""
-        resp = await self._get(endpoint, params)
-        return parse_dahua_response(resp.text)
+        return parse_kv(await self.client.async_get_text(endpoint), strip_prefix=True)
 
-    async def get_raw(self, endpoint: str, params: dict[str, Any] | None = None) -> str:
+    async def get_raw(self, endpoint: str) -> str:
         """GET a CGI endpoint and return raw text."""
-        resp = await self._get(endpoint, params)
-        return resp.text
+        return await self.client.async_get_text(endpoint)
 
-    async def get_bytes(
-        self, endpoint: str, params: dict[str, Any] | None = None
-    ) -> bytes:
-        """GET a CGI endpoint and return raw bytes (e.g. snapshot JPEG)."""
-        resp = await self._get(endpoint, params)
-        return resp.content
+    async def get_bytes(self, endpoint: str) -> bytes:
+        """GET a CGI endpoint and return raw bytes (e.g. a snapshot JPEG)."""
+        return await self.client.async_get_bytes(endpoint)
 
 
 class DahuaCameraManager:

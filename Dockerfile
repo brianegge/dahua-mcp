@@ -1,6 +1,8 @@
 FROM python:3.14-alpine3.23 AS builder
 
-RUN pip install --root-user-action=ignore --no-cache-dir --upgrade pip \
+# git: aiodahua is a git dependency until it is on PyPI (see pyproject.toml).
+RUN apk add --no-cache git \
+    && pip install --root-user-action=ignore --no-cache-dir --upgrade pip \
     && pip install --root-user-action=ignore --no-cache-dir uv
 
 ENV UV_LINK_MODE=copy

@@ -177,6 +177,7 @@ All settings beyond camera credentials are configured via environment variables:
 |----------|---------|-------------|
 | `DAHUA_CAMERAS_CONFIG` | `~/.config/dahua-mcp/cameras.yaml` | Path to cameras config file (JSON or YAML). Auto-discovers from `~/.config/dahua-mcp/` if not set. |
 | `DAHUA_TIMEOUT` | `20` | HTTP request timeout in seconds |
+| `DAHUA_SNAPSHOT_DIR` | system temp dir | Directory `take_snapshot` writes JPEGs to |
 | `READ_ONLY_MODE` | `false` | Disable all write tools (reboot, set_config, etc.) |
 | `DISABLED_TAGS` | — | Comma-separated tags to disable (e.g. `destructive,write`) |
 | `LOG_LEVEL` | `INFO` | Logging level |
@@ -215,6 +216,7 @@ All settings beyond camera credentials are configured via environment variables:
 | `get_config` | Get any config section by name | Yes |
 | `get_motion_detection` | Get motion detection config | Yes |
 | `get_video_in_mode` | Get video input mode (day/night profile) | Yes |
+| `get_exposure` | Get exposure mode, shutter range and gain per day/night profile | Yes |
 | `get_encoding_config` | Get encoding/streaming config | Yes |
 | `get_network_config` | Get network config (IP, gateway, DNS) | Yes |
 | `get_ntp_config` | Get NTP time sync config | Yes |
@@ -225,6 +227,8 @@ All settings beyond camera credentials are configured via environment variables:
 |------|-------------|-------------|
 | `set_config` | Set arbitrary config key-value pairs | Yes |
 | `enable_motion_detection` | Enable/disable motion detection | No |
+| `set_shutter_range` | Cap the slowest shutter (e.g. `1/60`) to cut motion blur | No |
+| `set_exposure_auto` | Hand exposure back to the camera | No |
 | `set_record_mode` | Set recording mode (auto/manual/off) | No |
 
 ### System Control
@@ -232,13 +236,53 @@ All settings beyond camera credentials are configured via environment variables:
 | Tool | Description | Destructive |
 |------|-------------|-------------|
 | `reboot` | Reboot the camera | Yes |
-| `take_snapshot` | Take a JPEG snapshot (base64) | No |
+| `take_snapshot` | Take a JPEG snapshot, saved to disk (returns the path) | No |
+
+### Storage / Recordings
+
+| Tool | Description | Read-Only |
+|------|-------------|-----------|
+| `get_storage_info` | Hard drive status, capacity and health | Yes |
+| `find_recordings` | List recorded files, to confirm a recorder is recording | Yes |
 
 ### Logs
 
 | Tool | Description | Read-Only |
 |------|-------------|-----------|
 | `search_logs` | Search camera logs by time range and type | Yes |
+
+## Firmware quirks
+
+The device protocol lives in [aiodahua](https://github.com/brianegge/aiodahua),
+which this server is a thin MCP layer over. That is where the digest/basic auth
+negotiation, the CGI parsing and the firmware quirks are implemented and
+tested, so the Home Assistant integration and this server share one
+implementation instead of two.
+
+Behaviours confirmed against real hardware, handled for you:
+
+- **Clearing a config field.** Sending `Key=` with an empty value returns `OK`
+  and changes nothing. Pass `""` to `set_config` and it is sent as a single
+  space, which the device trims back to `""`.
+- **`&` cannot appear in a config value.** The firmware percent-decodes the
+  whole query string *before* splitting it on `&`, so an encoded `&` still
+  terminates the value — the request either returns HTTP 400 or the value is
+  silently truncated. `set_config` raises a clear error instead. `#`, `+`, `%`,
+  `=`, `/` and `'` are all fine and round-trip correctly.
+- **`used == total` on a healthy disk.** A recorder pre-allocates the whole
+  drive into fixed-size blocks when it formats, so even a brand new disk reports
+  100% used. `get_storage_info` flags this so it is not mistaken for a full
+  disk; use `find_recordings` to confirm writes are landing.
+- **`find_recordings` channels are 1-based.** Channel `0` is rejected.
+- **A missing endpoint is an error body, not a 404.** Older firmware answers
+  `Bad Request!`, 2024 builds answer `Not Implemented!` with HTTP 501, and some
+  failures arrive as HTTP 200 with an error body that would otherwise parse
+  into a plausible-looking dict.
+- **Some devices only accept basic auth.** Digest is tried first and the
+  fallback is automatic.
+- **A Lorex E891AB reboots if asked for `audio.cgi`**, dropping HTTP and RTSP
+  for ~105 seconds. The library refuses that request on the brands known to do
+  it.
 
 ## Development
 

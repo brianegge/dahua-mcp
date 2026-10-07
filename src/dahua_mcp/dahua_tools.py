@@ -4,14 +4,30 @@ Dahua MCP Server Tools
 
 import asyncio
 import base64
-import contextlib
 import json
+import os
+import re
+import tempfile
+import time
+import uuid
+from pathlib import Path
 from typing import Annotated
 
+from aiodahua import async_discover
+from aiodahua import build_config_query
 from fastmcp import Context
 from pydantic import Field
 
 from dahua_mcp.dahua_client import DahuaCameraManager
+
+
+def _snapshot_dir() -> Path:
+    """Directory snapshots are written to (DAHUA_SNAPSHOT_DIR, else a temp dir)."""
+    path = Path(
+        os.getenv("DAHUA_SNAPSHOT_DIR") or Path(tempfile.gettempdir()) / "dahua-mcp"
+    )
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _error_str(e: Exception) -> str:
@@ -56,6 +72,101 @@ def register_tools(mcp, config):
             }
         except Exception as e:
             await ctx.error(f"Error listing cameras: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "discovery", "read-only"},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def discover_devices(
+        targets: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Addresses to query. Omit to multicast/broadcast on this "
+                    "host's own segment. Pass unicast addresses to probe "
+                    "specific hosts across a routed network."
+                ),
+            ),
+        ] = None,
+        source_ip: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Local address to send from. Required on a multi-homed "
+                    "host to aim the query at the camera VLAN."
+                ),
+            ),
+        ] = None,
+        mac: Annotated[
+            str | None,
+            Field(default=None, description="Restrict the query to one MAC."),
+        ] = None,
+        timeout: Annotated[
+            float,
+            Field(
+                default=3.0, ge=0.5, le=30.0, description="Seconds to collect replies."
+            ),
+        ] = 3.0,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Find Dahua devices on the network, including ones not in cameras.yaml.
+
+        Uses DHDiscover (UDP 37810), which needs no credentials and answers
+        even from a device on the wrong subnet -- so this finds a
+        factory-default camera that has no DHCP lease, no ARP entry, and does
+        not respond to a ping sweep.
+
+        Scope: a multicast/broadcast query only reaches the sending host's own
+        layer-2 segment. To find unknown devices on a camera VLAN, run from a
+        host on that VLAN, or pass unicast addresses in `targets`, which do
+        follow normal routing.
+
+        Args:
+            targets: Addresses to query; defaults to multicast + broadcast.
+            source_ip: Local source address, to pick the segment.
+            mac: Restrict the query to one device.
+            timeout: Seconds to collect replies.
+
+        Returns:
+            dict: List of devices with address, model, serial and DHCP state.
+                `reachable` is False when a device's own IP does not match
+                where it answered from -- i.e. it is on a foreign subnet.
+        """
+        try:
+            await ctx.info("Discovering Dahua devices...")
+            devices = await async_discover(
+                targets=targets, source_ip=source_ip, mac=mac, timeout=timeout
+            )
+            return {
+                "count": len(devices),
+                "devices": [
+                    {
+                        "mac": d.mac,
+                        "ip": d.ip,
+                        "netmask": d.netmask,
+                        "gateway": d.gateway,
+                        "dhcp": d.dhcp,
+                        "device_type": d.device_type,
+                        "serial": d.serial,
+                        "machine_name": d.machine_name,
+                        "version": d.version,
+                        "http_port": d.http_port,
+                        "source_ip": d.source_ip,
+                        "reachable": d.reachable,
+                    }
+                    for d in devices
+                ],
+            }
+        except Exception as e:
+            await ctx.error(f"Error discovering devices: {_error_str(e)}")
             return {"error": _error_str(e)}
 
     ##########################
@@ -469,6 +580,48 @@ def register_tools(mcp, config):
             "idempotentHint": True,
         },
     )
+    async def get_exposure(
+        camera: Annotated[
+            str,
+            Field(description="Camera name from list_cameras"),
+        ],
+        channel: Annotated[
+            int,
+            Field(default=0, description="Channel number (default: 0)"),
+        ] = 0,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Get exposure settings per day/night profile: mode, shutter range, gain.
+
+        The shutter range is reported even in auto mode, where the camera
+        ignores it; "shutter_range_applies" says whether it is in force.
+        "slowest" is the slowest shutter allowed, as "1/N" of a second -- the
+        figure that decides motion blur.
+
+        Args:
+            camera: Camera name from list_cameras.
+            channel: Channel number (default: 0).
+
+        Returns:
+            dict: {"profiles": [{"name": "day", "mode_name": ..., "slowest": "1/60", ...}]}
+        """
+        try:
+            await ctx.info(f"Getting exposure for {camera} channel {channel}...")
+            cam = manager.get_camera(camera)
+            return {"profiles": await cam.client.async_get_exposure(channel)}
+        except Exception as e:
+            await ctx.error(f"Error getting exposure: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "config", "read-only"},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
     async def get_video_in_mode(
         camera: Annotated[
             str,
@@ -625,8 +778,13 @@ def register_tools(mcp, config):
         """
         Set configuration values on a camera. This is the generic config setter.
 
-        Each key-value pair is sent as a setConfig parameter.
+        Each key-value pair is sent as a setConfig parameter. Values are
+        percent-encoded, so they may safely contain spaces, "&" or "=".
         Example: set_config("front-door", {"MotionDetect[0].Enable": "true"})
+
+        Pass an empty string to clear a field. Dahua firmware ignores a bare
+        "Key=" (it answers OK but changes nothing), so "" is sent as a single
+        space, which the device trims back to "".
 
         Args:
             camera: Camera name from list_cameras.
@@ -639,7 +797,7 @@ def register_tools(mcp, config):
             parsed = json.loads(params) if isinstance(params, str) else params
             await ctx.info(f"Setting config on {camera}: {parsed}...")
             cam = manager.get_camera(camera)
-            param_str = "&".join(f"{k}={v}" for k, v in parsed.items())
+            param_str = build_config_query(parsed)
             return await cam.get_parsed(
                 f"configManager.cgi?action=setConfig&{param_str}"
             )
@@ -693,6 +851,104 @@ def register_tools(mcp, config):
             )
         except Exception as e:
             await ctx.error(f"Error toggling motion detection: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "config", "write"},
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def set_shutter_range(
+        camera: Annotated[
+            str,
+            Field(description="Camera name from list_cameras"),
+        ],
+        slowest: Annotated[
+            str,
+            Field(
+                description=(
+                    'Slowest shutter allowed, as a fraction of a second ("1/60") '
+                    'or milliseconds ("16.67")'
+                )
+            ),
+        ],
+        fastest: Annotated[
+            str,
+            Field(
+                default="0.1",
+                description="Fastest shutter allowed, same format (default: 0.1 ms)",
+            ),
+        ] = "0.1",
+        channel: Annotated[
+            int,
+            Field(default=0, description="Channel number (default: 0)"),
+        ] = 0,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Cap how slow the shutter may go, on every day/night profile, to cut motion blur.
+
+        Exposure and gain stay automatic inside the range. A faster shutter is
+        paid for with gain, so expect more noise in dim light. Undo with
+        set_exposure_auto.
+
+        Args:
+            camera: Camera name from list_cameras.
+            slowest: Slowest shutter allowed, e.g. "1/60" or "16.67".
+            fastest: Fastest shutter allowed (default "0.1" ms).
+            channel: Channel number (default: 0).
+
+        Returns:
+            dict: {"ok": bool, "profiles": [...]} -- the settings read back.
+        """
+        try:
+            await ctx.info(f"Capping shutter on {camera} at {slowest}...")
+            cam = manager.get_camera(camera)
+            ok = await cam.client.async_set_shutter_range(slowest, fastest, channel)
+            return {"ok": ok, "profiles": await cam.client.async_get_exposure(channel)}
+        except Exception as e:
+            await ctx.error(f"Error setting shutter range: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "config", "write"},
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def set_exposure_auto(
+        camera: Annotated[
+            str,
+            Field(description="Camera name from list_cameras"),
+        ],
+        channel: Annotated[
+            int,
+            Field(default=0, description="Channel number (default: 0)"),
+        ] = 0,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Hand exposure back to the camera on every profile (undoes set_shutter_range).
+
+        Args:
+            camera: Camera name from list_cameras.
+            channel: Channel number (default: 0).
+
+        Returns:
+            dict: {"ok": bool, "profiles": [...]} -- the settings read back.
+        """
+        try:
+            await ctx.info(f"Setting auto exposure on {camera}...")
+            cam = manager.get_camera(camera)
+            ok = await cam.client.async_set_exposure_auto(channel)
+            return {"ok": ok, "profiles": await cam.client.async_get_exposure(channel)}
+        except Exception as e:
+            await ctx.error(f"Error setting auto exposure: {_error_str(e)}")
             return {"error": _error_str(e)}
 
     @mcp.tool(
@@ -797,30 +1053,169 @@ def register_tools(mcp, config):
                 description="Channel number (default: 1). Note: channel is 1-based for snapshots.",
             ),
         ] = 1,
+        return_base64: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Also return the image inline as base64. Off by default: a "
+                    "4K JPEG is ~1 MB, which is far larger than most model "
+                    "context windows allow."
+                ),
+            ),
+        ] = False,
         ctx: Context = None,
     ) -> dict:
         """
-        Take a JPEG snapshot from a camera. Returns base64-encoded image data.
+        Take a JPEG snapshot and save it to disk, returning the file path.
+
+        A full-resolution snapshot is around a megabyte; returning it inline as
+        base64 overflows a typical context window, so by default the image is
+        written to DAHUA_SNAPSHOT_DIR (a temp directory if unset) and only the
+        path is returned. Set return_base64=True if you genuinely need the bytes
+        inline.
 
         Args:
             camera: Camera name from list_cameras.
             channel: Channel number, 1-based (default: 1).
+            return_base64: Include the image inline as base64 (default: False).
 
         Returns:
-            dict: {"image_base64": "...", "content_type": "image/jpeg", "size_bytes": N}
+            dict: {"path": "...", "content_type": "image/jpeg", "size_bytes": N}
         """
         try:
             await ctx.info(f"Taking snapshot from {camera} channel {channel}...")
             cam = manager.get_camera(camera)
-            data = await cam.get_bytes(f"snapshot.cgi?channel={channel}")
-            encoded = base64.b64encode(data).decode("ascii")
-            return {
-                "image_base64": encoded,
+            data = await cam.client.async_get_snapshot(channel)
+
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", camera)
+            filename = (
+                f"{safe_name}-ch{channel}-{time.strftime('%Y%m%d-%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}.jpg"
+            )
+            path = _snapshot_dir() / filename
+            path.write_bytes(data)
+
+            result = {
+                "path": str(path),
                 "content_type": "image/jpeg",
                 "size_bytes": len(data),
             }
+            if return_base64:
+                result["image_base64"] = base64.b64encode(data).decode("ascii")
+            return result
         except Exception as e:
             await ctx.error(f"Error taking snapshot: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    ##########################
+    # Storage / recordings
+    ##########################
+
+    @mcp.tool(
+        tags={"dahua", "storage", "read-only"},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def get_storage_info(
+        camera: Annotated[
+            str,
+            Field(description="Camera or NVR name from list_cameras"),
+        ],
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Get hard drive status and capacity from a recorder.
+
+        Returns one entry per physical device with its partitions rolled up,
+        a total/free capacity, and a "healthy" flag derived from the device
+        state plus each partition's error flag.
+
+        Note: a Dahua recorder pre-allocates the whole disk when it formats, so
+        used == total even on a brand new drive. That is not a full disk. Use
+        find_recordings to confirm footage is actually being written.
+
+        Args:
+            camera: Camera or NVR name from list_cameras.
+
+        Returns:
+            dict: {"devices": [...], "device_count": N}
+        """
+        try:
+            await ctx.info(f"Getting storage info from {camera}...")
+            cam = manager.get_camera(camera)
+            devices = await cam.client.async_get_storage_info()
+            return {"devices": devices, "device_count": len(devices)}
+        except Exception as e:
+            await ctx.error(f"Error getting storage info: {_error_str(e)}")
+            return {"error": _error_str(e)}
+
+    @mcp.tool(
+        tags={"dahua", "storage", "read-only"},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def find_recordings(
+        camera: Annotated[
+            str,
+            Field(description="Camera or NVR name from list_cameras"),
+        ],
+        start_time: Annotated[
+            str,
+            Field(description="Start time as 'YYYY-MM-DD HH:MM:SS'"),
+        ],
+        end_time: Annotated[
+            str,
+            Field(description="End time as 'YYYY-MM-DD HH:MM:SS'"),
+        ],
+        channel: Annotated[
+            int,
+            Field(
+                default=1,
+                description="Channel number, 1-based (channel 0 is rejected by the firmware)",
+            ),
+        ] = 1,
+        count: Annotated[
+            int,
+            Field(default=20, description="Max number of files to return"),
+        ] = 20,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        List recorded video files, to confirm a recorder is really recording.
+
+        Uses the 4-step mediaFileFind API (factory.create / findFile /
+        findNextFile / close+destroy). Dahua marks each filename with its
+        record type: [R] regular/continuous, [M] motion, [A] alarm.
+
+        Args:
+            camera: Camera or NVR name from list_cameras.
+            start_time: Start time as 'YYYY-MM-DD HH:MM:SS'.
+            end_time: End time as 'YYYY-MM-DD HH:MM:SS'.
+            channel: Channel number, 1-based (default: 1).
+            count: Max number of files to return (default: 20).
+
+        Returns:
+            dict: {"found": N, "channel": N, "files": [{"path", "start_time", ...}]}
+        """
+        try:
+            await ctx.info(
+                f"Finding recordings on {camera} channel {channel} "
+                f"from {start_time} to {end_time}..."
+            )
+            cam = manager.get_camera(camera)
+            found, files = await cam.client.async_find_recordings(
+                start_time, end_time, channel=channel, count=count
+            )
+            return {"found": found, "channel": channel, "files": files}
+        except Exception as e:
+            await ctx.error(f"Error finding recordings: {_error_str(e)}")
             return {"error": _error_str(e)}
 
     ##########################
@@ -886,36 +1281,10 @@ def register_tools(mcp, config):
                 f"Searching logs on {camera} from {start_time} to {end_time}..."
             )
             cam = manager.get_camera(camera)
-            lt = log_type or "All"
-
-            # Step 1: startFind
-            start_resp = await cam.get_raw(
-                f"log.cgi?action=startFind&condition.Channel=0&condition.Types=[{lt}]"
-                f"&condition.StartTime={start_time}&condition.EndTime={end_time}"
+            entries = await cam.client.async_search_logs(
+                start_time, end_time, log_type=log_type or "All", count=count
             )
-            # Extract token from response
-            token = None
-            for line in start_resp.strip().splitlines():
-                if "token" in line.lower() and "=" in line:
-                    token = line.split("=", 1)[1].strip()
-                    break
-
-            if not token:
-                return {
-                    "error": "Failed to start log search — no token returned",
-                    "raw": start_resp,
-                }
-
-            # Step 2: doFind
-            find_resp = await cam.get_parsed(
-                f"log.cgi?action=doFind&token={token}&count={count}"
-            )
-
-            # Step 3: stopFind (best-effort cleanup)
-            with contextlib.suppress(Exception):
-                await cam.get_raw(f"log.cgi?action=stopFind&token={token}")
-
-            return find_resp
+            return {"count": len(entries), "entries": entries}
         except Exception as e:
             await ctx.error(f"Error searching logs: {_error_str(e)}")
             return {"error": _error_str(e)}
