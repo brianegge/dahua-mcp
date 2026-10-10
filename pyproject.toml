@@ -32,12 +32,6 @@ dependencies = [
     "pyyaml>=6.0.0",
 ]
 
-# aiodahua has a release workflow but no PyPI release yet, so it is pulled
-# from git. Drop this table once it publishes -- the requirement above is
-# already the one that will resolve.
-[tool.uv.sources]
-aiodahua = { git = "https://github.com/brianegge/aiodahua", branch = "main" }
-
 [dependency-groups]
 dev = [
     "ruff",
