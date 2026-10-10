@@ -5,10 +5,14 @@ requires-python = ">=3.11, <3.15"
 [[package]]
 name = "aiodahua"
 version = "0.5.0"
-source = { git = "https://github.com/brianegge/aiodahua?branch=main#a8ffc093b8e37b34d2e1bfbb4105906e65ff7b12" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "yarl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9c/9f/90450265cdacfc698d9719be253e516f23ea35f6395793f91137710fcc51/aiodahua-0.5.0.tar.gz", hash = "sha256:f714f66e3e7ef199f58c18cb658724a5aa2df75f75c3d88e68e30c058aac97b5", size = 151682, upload-time = "2026-10-10T04:54:37.101Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/18/d8/1cc0c6d75438f5d38cbea115681b927cc1590aa83437a42f43312da83c3c/aiodahua-0.5.0-py3-none-any.whl", hash = "sha256:344ea8ce4de4c64a4e4e23982bdb2c13559e896092f29a43c1ee768f5dc6154f", size = 54382, upload-time = "2026-10-10T04:54:35.84Z" },
 ]
 
 [[package]]
@@ -644,7 +648,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiodahua", git = "https://github.com/brianegge/aiodahua?branch=main" },
+    { name = "aiodahua", specifier = ">=0.5.0" },
     { name = "fastmcp", specifier = ">=2.14.0,<5" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
