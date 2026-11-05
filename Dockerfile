@@ -1,4 +1,4 @@
-FROM python:3.14-alpine3.23 AS builder
+FROM python:3.15-alpine3.23 AS builder
 
 # git: aiodahua is a git dependency until it is on PyPI (see pyproject.toml).
 RUN apk add --no-cache git \
@@ -21,7 +21,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
 
-FROM python:3.14-alpine3.23
+FROM python:3.15-alpine3.23
 LABEL org.opencontainers.image.title="Dahua MCP Server" \
       org.opencontainers.image.description="MCP server for Dahua/Amcrest IP camera management"
 ENV PYTHONUNBUFFERED=1
